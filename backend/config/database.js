@@ -6,27 +6,27 @@ const connectDB = async () => {
     try {
         // Mongoose connection options
         mongoose.set('strictQuery', false);
-        
+
         await mongoose.connect(MONGODB_URI, {
             serverSelectionTimeoutMS: 5000, // Timeout after 5s
             socketTimeoutMS: 45000,
         });
-        
+
         console.log('✓ Đã kết nối MongoDB Atlas thành công');
-        
+
         // Handle connection events
         mongoose.connection.on('error', (err) => {
             console.error('⚠️ MongoDB connection error:', err.message);
         });
-        
+
         mongoose.connection.on('disconnected', () => {
             console.log('⚠️ MongoDB disconnected');
         });
-        
+
         mongoose.connection.on('reconnected', () => {
             console.log('✓ MongoDB reconnected');
         });
-        
+
     } catch (error) {
         console.error('❌ Lỗi kết nối MongoDB:', error.message);
         console.log('⚠️ Server sẽ chạy mà không có database.');
