@@ -219,3 +219,89 @@ function showMessage(message, type) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { getCurrentUser, logout };
 }
+
+// MetaMask Login Function
+async function connectMetaMask() {
+    try {
+        // Check if MetaMask is installed
+        if (typeof window.ethereum === 'undefined') {
+            showMessage('Vui lòng cài đặt MetaMask Extension! 🦊', 'error');
+            setTimeout(() => {
+                window.open('https://metamask.io/download/', '_blank');
+            }, 2000);
+            return;
+        }
+
+        showMessage('Đang kết nối với MetaMask...', 'info');
+
+        // Request account access
+        const accounts = await window.ethereum.request({ 
+            method: 'eth_requestAccounts' 
+        });
+
+        if (!accounts || accounts.length === 0) {
+            throw new Error('Không tìm thấy tài khoản MetaMask');
+        }
+
+        const walletAddress = accounts[0];
+
+        // Try to login with wallet address
+        const response = await fetch(`${API_URL}/auth/wallet-login`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ walletAddress })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            // Lưu token và thông tin user
+            localStorage.setItem('auth_token', data.token);
+            localStorage.setItem('current_user', JSON.stringify(data.user));
+            localStorage.setItem('wallet_address', walletAddress);
+
+            showMessage('🎉 Đăng nhập thành công với MetaMask!', 'success');
+            
+            setTimeout(() => {
+                window.location.href = 'index.html';
+            }, 1500);
+        } else {
+            // Wallet chưa được đăng ký
+            showMessage('⚠️ Ví này chưa được liên kết với tài khoản nào!', 'warning');
+            
+            // Có thể thêm chức năng đăng ký với ví này
+            if (confirm('Bạn có muốn đăng ký tài khoản mới với ví này không?')) {
+                // Chuyển sang form đăng ký và điền sẵn wallet address
+                switchForm('register');
+                // Có thể thêm trường ẩn để lưu wallet address khi đăng ký
+            }
+        }
+    } catch (error) {
+        console.error('MetaMask login error:', error);
+        
+        let errorMessage = 'Lỗi kết nối MetaMask: ';
+        if (error.code === 4001) {
+            errorMessage = 'Bạn đã từ chối kết nối với MetaMask';
+        } else if (error.message) {
+            errorMessage += error.message;
+        } else {
+            errorMessage += 'Vui lòng thử lại!';
+        }
+        
+        showMessage(errorMessage, 'error');
+    }
+}
+
+// Listen for account changes
+if (typeof window.ethereum !== 'undefined') {
+    window.ethereum.on('accountsChanged', function (accounts) {
+        if (accounts.length === 0) {
+            console.log('MetaMask is locked or user has no accounts');
+        } else {
+            console.log('Account changed:', accounts[0]);
+            // Optionally reload or re-authenticate
+        }
+    });
+}
