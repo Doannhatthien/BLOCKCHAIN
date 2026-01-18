@@ -359,11 +359,71 @@ function setupEventListeners() {
 // Connect to MetaMask
 async function connectWallet() {
     try {
+        // Check if MetaMask is installed
+        if (typeof window.ethereum === 'undefined') {
+            showAlert('Vui lòng cài đặt MetaMask Extension! 🦊', 'error');
+            window.open('https://metamask.io/download/', '_blank');
+            return;
+        }
+        
         showLoading();
         
-        // Request account access
-        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-        userAccount = accounts[0];
+        // Request account access with better error handling
+        try {
+            const accounts = await window.ethereum.request({ 
+                method: 'eth_requestAccounts' 
+            });
+            
+            if (!accounts || accounts.length === 0) {
+                throw new Error('Không tìm thấy tài khoản MetaMask');
+            }
+            
+            userAccount = accounts[0];
+            
+        } catch (err) {
+            if (err.code === 4001) {
+                // User rejected the request
+                throw new Error('Bạn đã từ chối kết nối với MetaMask');
+            }
+            throw err;
+        }
+        
+        // Check network (Hardhat local network)
+        try {
+            const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+            const expectedChainId = '0x7a69'; // 31337 in hex (Hardhat default)
+            
+            if (chainId !== expectedChainId) {
+                showAlert('⚠️ Đang chuyển sang mạng Hardhat Local...', 'warning');
+                try {
+                    await window.ethereum.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: expectedChainId }],
+                    });
+                } catch (switchError) {
+                    // Network doesn't exist, add it
+                    if (switchError.code === 4902) {
+                        await window.ethereum.request({
+                            method: 'wallet_addEthereumChain',
+                            params: [{
+                                chainId: expectedChainId,
+                                chainName: 'Hardhat Local',
+                                nativeCurrency: {
+                                    name: 'ETH',
+                                    symbol: 'ETH',
+                                    decimals: 18
+                                },
+                                rpcUrls: ['http://127.0.0.1:8545'],
+                            }],
+                        });
+                    } else {
+                        throw switchError;
+                    }
+                }
+            }
+        } catch (error) {
+            console.warn('Lỗi kiểm tra mạng:', error);
+        }
         
         // Initialize Web3
         web3 = new Web3(window.ethereum);
@@ -371,39 +431,83 @@ async function connectWallet() {
         // Initialize contract
         contract = new web3.eth.Contract(CONTRACT_ABI, CONTRACT_ADDRESS);
         
+        // Verify contract exists
+        const code = await web3.eth.getCode(CONTRACT_ADDRESS);
+        if (code === '0x' || code === '0x0') {
+            throw new Error('Smart contract chưa được deploy tại địa chỉ này');
+        }
+        
         // Update UI
-        document.getElementById('statusText').textContent = 'Đã kết nối';
+        document.getElementById('statusText').textContent = '✅ Đã kết nối';
         document.getElementById('statusText').className = 'status-connected';
         document.getElementById('accountAddress').textContent = formatAddress(userAccount);
+        document.getElementById('accountAddress').title = userAccount; // Show full address on hover
         
         // Check if user is admin
         const adminAddress = await contract.methods.admin().call();
         isAdmin = userAccount.toLowerCase() === adminAddress.toLowerCase();
         
-        document.getElementById('userRole').textContent = isAdmin ? 'Quản trị viên' : 'Cử tri';
+        // Get current user info from localStorage
+        const currentUser = window.authModule ? window.authModule.getCurrentUser() : null;
+        
+        // Update role display
+        const userRoleEl = document.getElementById('userRole');
+        if (isAdmin) {
+            userRoleEl.innerHTML = '👑 Quản trị viên';
+        } else if (currentUser) {
+            userRoleEl.innerHTML = `🎓 ${currentUser.studentId}`;
+        }
         
         // Show/hide admin features
         if (isAdmin) {
-            document.querySelectorAll('.admin-only').forEach(el => el.classList.add('show'));
+            document.querySelectorAll('.admin-only').forEach(el => {
+                el.style.display = 'inline-block';
+                el.style.visibility = 'visible';
+            });
         }
         
         // Show tabs
         document.getElementById('tabs').style.display = 'flex';
-        document.getElementById('connectWallet').style.display = 'none';
+        
+        // Hide connect button and show disconnect option
+        const connectBtn = document.getElementById('connectWallet');
+        connectBtn.textContent = '🔌 Ngắt kết nối';
+        connectBtn.onclick = disconnectWallet;
+        connectBtn.classList.remove('btn-primary');
+        connectBtn.classList.add('btn-danger');
         
         // Load data
         await loadElectionData();
         
-        // Setup account change listener
-        window.ethereum.on('accountsChanged', handleAccountChange);
+        // Setup event listeners
+        if (window.ethereum) {
+            // Remove old listeners to prevent duplicates
+            window.ethereum.removeAllListeners('accountsChanged');
+            window.ethereum.removeAllListeners('chainChanged');
+            
+            // Setup account change listener
+            window.ethereum.on('accountsChanged', handleAccountChange);
+            
+            // Setup chain change listener
+            window.ethereum.on('chainChanged', () => {
+                window.location.reload();
+            });
+        }
         
         hideLoading();
-        showAlert('Kết nối ví thành công!', 'success');
+        showAlert('🎉 Kết nối ví thành công!', 'success');
         
     } catch (error) {
         hideLoading();
         console.error('Error connecting wallet:', error);
-        showAlert('Lỗi kết nối ví: ' + error.message, 'error');
+        showAlert('❌ Lỗi kết nối: ' + error.message, 'error');
+    }
+}
+
+// Disconnect wallet
+function disconnectWallet() {
+    if (confirm('Bạn có chắc muốn ngắt kết nối ví?')) {
+        window.location.reload();
     }
 }
 
@@ -924,17 +1028,44 @@ function hideLoading() {
     document.getElementById('loadingOverlay').classList.remove('active');
 }
 
-function showAlert(message, type) {
-    const alertDiv = document.createElement('div');
-    alertDiv.className = `alert alert-${type}`;
-    alertDiv.textContent = message;
+function showAlert(message, type = 'info') {
+    // Remove any existing toasts
+    const existingToasts = document.querySelectorAll('.toast');
+    existingToasts.forEach(toast => toast.remove());
     
-    document.querySelector('.container').insertBefore(
-        alertDiv,
-        document.querySelector('.container').firstChild.nextSibling
-    );
+    // Create toast element
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
     
+    // Icon based on type
+    const icons = {
+        success: '✅',
+        error: '❌',
+        warning: '⚠️',
+        info: 'ℹ️'
+    };
+    
+    toast.innerHTML = `
+        <span class="toast-icon">${icons[type] || icons.info}</span>
+        <span class="toast-message">${message}</span>
+    `;
+    
+    document.body.appendChild(toast);
+    
+    // Animate in
     setTimeout(() => {
-        alertDiv.remove();
+        toast.style.animation = 'slideIn 0.3s ease';
+    }, 10);
+    
+    // Auto remove after 5 seconds
+    setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
     }, 5000);
+    
+    // Click to dismiss
+    toast.addEventListener('click', () => {
+        toast.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    });
 }
